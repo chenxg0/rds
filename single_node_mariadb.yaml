@@ -40,9 +40,6 @@ parameters:
     type: string
     description: mysql root pass
     default: 123456
-#  Clustername:
-#    type: string
-#    default: galeracluster
 #  server_security_group_id:
 #    type: string
 #    default: 610dadae-9843-4ecf-a5b1-9ce011dfab92
