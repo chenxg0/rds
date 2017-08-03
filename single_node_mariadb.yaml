@@ -1,0 +1,110 @@
+heat_template_version: 2017-02-24
+description: single node mariadb.
+parameters: 
+#  public_net_id:
+#    type: string
+#    description: ID of public network for which floating IP addresses will be allocated
+  ImageID:
+    type: string
+    description: Image use to boot a server
+    default: ubuntu-16.04
+  Flavor:
+    type: string
+    default: m2.small
+  NetID:
+    type: string
+    description: ID of private network into which servers get deployed
+    default: e62785b1-79a3-4fa3-9b32-f4611ecdb4da
+  Private_subnet_id:
+    type: string
+    description: ID of private sub network into which servers get deployed
+    default: 11b9e075-83cb-4cbb-a0b7-5556bfe69464
+  MasterHost:
+    type: string
+    default: 10.21.23.253
+
+  SystemRootPass:
+    type: string
+    description: System root password for ubuntu,6 characters at least
+    default: 0
+  DBName:
+    type: string
+    default: cloudrds
+  DBUser:
+    type: string
+    default: cloudrds
+  DBPass:
+    type: string
+    default: cloudrds$147258
+  MysqlPass:
+    type: string
+    description: mysql root pass
+    default: 123456
+#  Clustername:
+#    type: string
+#    default: galeracluster
+#  server_security_group_id:
+#    type: string
+#    default: 610dadae-9843-4ecf-a5b1-9ce011dfab92
+
+resources:
+  mariadb:
+    type: OS::Nova::Server
+    properties:
+      name: mariadbserver1
+      image: { get_param: ImageID }
+      flavor: { get_param: Flavor }
+#      key_name: { get_param: key_name }
+      networks:
+      - network: { get_param: NetID }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __root_pass__: { get_param: SystemRootPass }
+            __master_host__: { get_param: MasterHost }
+            __mysql_root_password__: { get_param: MysqlPass }
+            __database_name__: { get_param: DBName }
+            __database_user__: { get_param: DBUser }
+            __database_password__: { get_param: DBPass }
+
+          template: |
+            #!/bin/bash
+            RootPass=__root_pass__
+            if [[ -n $RootPass ]] && [ ${#RootPass} -ge 6 ];then
+              echo "root:$RootPass" |chpasswd
+            fi
+            echo "deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial main restricted universe multiverse
+            deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial-updates main restricted universe multiverse
+            deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial-security main restricted universe multiverse" > /etc/apt/sources.list
+            pkill -9 apt
+            apt-get update
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install -y mariadb-server
+            
+            # configure MySQL root password
+            mysqladmin -u root password "__mysql_root_password__"
+ 
+            # listen on all network interfaces
+            sed -i "s/bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/my.cnf
+ 
+            # restart service
+            /etc/init.d/mysql restart
+
+            #create database
+            mysql -u root --password="__mysql_root_password__" <<EOF
+            CREATE DATABASE __database_name__;
+            CREATE USER '__database_user__'@'localhost';
+            SET PASSWORD FOR '__database_user__'@'localhost'=PASSWORD("__database_password__");
+            GRANT ALL PRIVILEGES ON __database_name__.* TO '__database_user__'@'localhost' IDENTIFIED BY '__database_password__';
+            CREATE USER '__database_user__'@'%';
+            SET PASSWORD FOR '__database_user__'@'%'=PASSWORD("__database_password__");
+            GRANT ALL PRIVILEGES ON __database_name__.* TO '__database_user__'@'%' IDENTIFIED BY '__database_password__';
+            FLUSH PRIVILEGES;
+            EOF
+
+outputs:
+  private_ip:
+    description: IP address of the server in the private network
+    value: { get_attr: [ mariadb, first_address ] }
+

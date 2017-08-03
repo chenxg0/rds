@@ -1,0 +1,45 @@
+heat_template_version: 2014-10-16
+description: A simple server.
+parameters:
+  ImageID:
+    type: string
+    description: Image use to boot a server
+    default: ubuntu-16.04
+  NetID:
+    type: string
+    description: Network ID for the server
+    default: e62785b1-79a3-4fa3-9b32-f4611ecdb4da
+  Flavor:
+    type: string
+    default: m1.small
+  SystemRootPass:
+    type: string
+    description: System root password for ubuntu,6 characters at least
+    default: r00tme!
+
+resources:
+  mysql:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: ImageID }
+      flavor: { get_param: Flavor }
+      networks:
+      - network: { get_param: NetID }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __root_pass__: { get_param: SystemRootPass }
+          template: |
+            #!/bin/bash
+            RootPass=__root_pass__
+            if [[ -n $RootPass ]] && [ ${#RootPass} -ge 6 ];then
+              echo "root:$RootPass" |chpasswd
+            fi
+            touch /root/helloworld
+            echo a>>/etc/apt/source.list
+          
+outputs:
+  private_ip:
+    description: IP address of the server in the private network
+    value: { get_attr: [ mysql, first_address ] }

@@ -1,0 +1,207 @@
+heat_template_version: 2017-02-24
+description: Double Mariadb Cluster.
+parameters: 
+#  public_net_id:
+#    type: string
+#    description: ID of public network for which floating IP addresses will be allocated
+  ImageID:
+    type: string
+    description: Image use to boot a server
+    default: ubuntu-16.04
+  Flavor:
+    type: string
+    default: m1.small
+  private_net_id:
+    type: string
+    description: ID of private network into which servers get deployed
+    default: e62785b1-79a3-4fa3-9b32-f4611ecdb4da 
+  private_subnet_id:
+    type: string
+    description: ID of private sub network into which servers get deployed
+    default: 11b9e075-83cb-4cbb-a0b7-5556bfe69464
+  MasterHost:
+    type: string
+    description: apt-get source
+    default: 10.21.23.253
+  SystemRootPass:
+    type: string
+    description: System root password for ubuntu,6 characters at least
+    default: 0
+  DBName:
+    type: string
+    default: cloudrds
+  DBUser:
+    type: string
+    default: cloudrds
+  DBPass:
+    type: string
+    default: cloudrds$147258
+  MysqlPass:
+    type: string
+    description: mysql root pass
+    default: 123456
+  Clustername:
+    type: string
+    default: galeracluster
+  server_security_group_id:
+    type: string
+    default: 610dadae-9843-4ecf-a5b1-9ce011dfab92
+
+resources:
+  server1_port:
+    type: OS::Neutron::Port
+    properties:
+#      networks:
+#        - network: { get_param: NetID }
+      network_id: { get_param: private_net_id }
+      fixed_ips:
+        - subnet_id: { get_param: private_subnet_id }
+
+  server2_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_net_id }
+      fixed_ips:
+        - subnet_id: { get_param: private_subnet_id }
+
+  server1:
+    type: OS::Nova::Server
+    properties:
+      name: Server1
+      image: { get_param: ImageID }
+      flavor: { get_param: Flavor }
+#      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server1_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __root_pass__: { get_param: SystemRootPass }
+            __master_host__: { get_param: MasterHost }
+            __mysql_root_password__: { get_param: MysqlPass }
+            __database_name__: { get_param: DBName }
+            __database_user__: { get_param: DBUser }
+            __database_password__: { get_param: DBPass }
+            __cluster_name__: { get_param: Clustername }
+            __first_ip__: { get_attr: [ server1_port,fixed_ips] }
+            __second_ip__: { get_attr: [ server2_port,fixed_ips] }
+
+          template: |
+            #!/bin/bash
+            RootPass=__root_pass__
+            if [[ -n $RootPass ]] && [ ${#RootPass} -ge 6 ];then
+              echo "root:$RootPass" |chpasswd
+            fi
+            echo "deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial main restricted universe multiverse
+            deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial-updates main restricted universe multiverse
+            deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial-security main restricted universe multiverse" > /etc/apt/sources.list
+            pkill -9 apt
+            #ipaddr1=`echo __first_ip__ |cut -d ":" -f 2 |cut -d "," -f 1 |sed 's/ //g'`
+            ipaddr2=`echo __second_ip__ |cut -d ":" -f 2 |cut -d "," -f 1 |sed 's/ //g'`
+            apt-get update
+            export DEBIAN_FRONTEND=noninteractive
+            #install mariadb
+            apt-get install -y mariadb-server
+            #apt-get install -y --allow-unauthenticated mariadb-server rsync
+            #configure MySQL root password
+            mysqladmin -u root password "__mysql_root_password__"
+            # listen on all network interfaces
+            sed -i "s/bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mariadb.conf.d/50-server.cnf
+            sed -i "s/#server-id.*/server-id = 10/" /etc/mysql/mariadb.conf.d/50-server.cnf
+            sed -i "s/#log_bin.*/log_bin = \/var\/log\/mysql\/mysql-bin.log/" /etc/mysql/mariadb.conf.d/50-server.cnf
+            #sed -i '/\[galera\]/a\wsrep_cluster_name=__cluster_name__' /etc/mysql/my.cnf
+            # restart service
+            /etc/init.d/mysql restart
+            sleep 10s
+            ufw allow 3306
+            #create repluser
+            mysql -u root --password="__mysql_root_password__" <<EOF
+            GRANT REPLICATION SLAVE,REPLICATION CLIENT ON *.* TO 'repluser'@'$ipaddr2' IDENTIFIED BY 'replpass';
+            FLUSH PRIVILEGES;
+            #show master status;
+            EOF
+                        
+            sleep 30s
+            #create database
+            mysql -u root --password="__mysql_root_password__" <<EOF
+            CREATE DATABASE __database_name__;
+            CREATE USER '__database_user__'@'localhost';
+            SET PASSWORD FOR '__database_user__'@'localhost'=PASSWORD("__database_password__");
+            GRANT ALL PRIVILEGES ON __database_name__.* TO '__database_user__'@'localhost' IDENTIFIED BY '__database_password__';
+            CREATE USER '__database_user__'@'%';
+            SET PASSWORD FOR '__database_user__'@'%'=PASSWORD("__database_password__");
+            GRANT ALL PRIVILEGES ON __database_name__.* TO '__database_user__'@'%' IDENTIFIED BY '__database_password__';
+            FLUSH PRIVILEGES;
+            EOF
+            
+  server2:
+    type: OS::Nova::Server
+    properties:
+      name: Server2
+      image: { get_param: ImageID }
+      flavor: { get_param: Flavor }
+#      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server2_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __root_pass__: { get_param: SystemRootPass }
+            __master_host__: { get_param: MasterHost }
+            __mysql_root_password__: { get_param: MysqlPass }
+            __database_name__: { get_param: DBName }
+            __database_user__: { get_param: DBUser }
+            __database_password__: { get_param: DBPass }
+            __cluster_name__: { get_param: Clustername }
+            __first_ip__: { get_attr: [ server1_port,fixed_ips] }
+            __second_ip__: { get_attr: [ server2_port,fixed_ips] }
+
+          template: |
+            #!/bin/bash
+            RootPass=__root_pass__
+            if [[ -n $RootPass ]] && [ ${#RootPass} -ge 6 ];then
+              echo "root:$RootPass" |chpasswd
+            fi
+            echo "deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial main restricted universe multiverse
+            deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial-updates main restricted universe multiverse
+            deb [arch=amd64] http://__master_host__/apt/mirror/cn.archive.ubuntu.com/ubuntu/ xenial-security main restricted universe multiverse" > /etc/apt/sources.list
+            pkill -9 apt
+            ipaddr1=`echo __first_ip__ |cut -d ":" -f 2 |cut -d "," -f 1 |sed 's/ //g'`
+            #ipaddr2=`echo __second_ip__ |cut -d ":" -f 2 |cut -d "," -f 1 |sed 's/ //g'`
+            apt-get update
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install -y mariadb-server
+            #apt-get install -y --allow-unauthenticated mariadb-server rsync
+            #configure MySQL root password
+            mysqladmin -u root password "__mysql_root_password__"
+            # listen on all network interfaces
+            sed -i "s/bind-address.*/bind-address = 0.0.0.0/;s/#server-id.*/server-id = 20/" /etc/mysql/mariadb.conf.d/50-server.cnf
+            sed -i '/\[mysqld\]/a\relay_log = mysql-relay-bin' /etc/mysql/mariadb.conf.d/50-server.cnf
+            sed -i '/\[mysqld\]/a\log_slave_updates = 1' /etc/mysql/mariadb.conf.d/50-server.cnf
+            sed -i '/\[mysqld\]/a\read_only = 1' /etc/mysql/mariadb.conf.d/50-server.cnf
+            # restart service
+            /etc/init.d/mysql restart
+            ufw allow 3306
+            /etc/init.d/mysql start
+            sleep 15s
+            mysql -u root --password="__mysql_root_password__" <<EOF
+            CHANGE MASTER TO MASTER_HOST='$ipaddr1',MASTER_USER='repluser',MASTER_PASSWORD='replpass',MASTER_LOG_FILE='mysql-bin.000001',MASTER_LOG_POS=640;
+            start slave;
+            EOF
+
+
+
+outputs:
+  server1_private_ip:
+    description: IP address of server1 in private network
+    value: { get_attr: [ server1,first_address ]}
+  server2_private_ip:
+    description: IP address of server1 in private network
+    value: { get_attr: [ server2,first_address ]}
+
+#  server1_public_ip:
+#    description: Floating IP address of server1 in public network
+#    value: { get_attr: [ server1_floating_ip, floating_ip_address ] }
+
