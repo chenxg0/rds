@@ -117,7 +117,7 @@ resources:
             ufw allow 3306
             #create repluser
             mysql -u root --password="__mysql_root_password__" <<EOF
-            GRANT REPLICATION SLAVE,REPLICATION CLIENT ON *.* TO 'repluser'@'$ipaddr2' IDENTIFIED BY 'replpass';
+            GRANT REPLICATION SLAVE,REPLICATION CLIENT ON *.* TO 'repluser'@'$ipaddr2' IDENTIFIED BY 'replpass!QA@WS';
             FLUSH PRIVILEGES;
             #show master status;
             EOF
@@ -187,7 +187,7 @@ resources:
             /etc/init.d/mysql start
             sleep 15s
             mysql -u root --password="__mysql_root_password__" <<EOF
-            CHANGE MASTER TO MASTER_HOST='$ipaddr1',MASTER_USER='repluser',MASTER_PASSWORD='replpass',MASTER_LOG_FILE='mysql-bin.000001',MASTER_LOG_POS=640;
+            CHANGE MASTER TO MASTER_HOST='$ipaddr1',MASTER_USER='repluser',MASTER_PASSWORD='replpass!QA@WS',MASTER_LOG_FILE='mysql-bin.000001',MASTER_LOG_POS=640;
             start slave;
             EOF
 
